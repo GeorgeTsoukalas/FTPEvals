@@ -1,0 +1,10 @@
+[submodule "data/putnambench"]
+	path = data/putnambench
+	url = https://github.com/trishullab/PutnamBench.git
+[submodule "imports/itp-interface"]
+	path = imports/itp-interface
+	url = https://github.com/trishullab/itp-interface.git
+[submodule "data/harmonic-datasets"]
+	path = data/harmonic-datasets
+	url = https://github.com/harmonic-ai/datasets.git
+	sparse-checkout = minif2f
