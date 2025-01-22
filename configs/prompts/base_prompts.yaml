@@ -1,0 +1,12 @@
+defaults:
+  - _self_
+  - system_prompts: none  # can be overridden with specific system prompts
+  - few_shot: none       # can be overridden with few-shot examples
+
+template: "Prove this theorem: {theorem}"
+input_variables:
+  - theorem
+
+max_tokens: 2048
+temperature: 0.7
+top_p: 0.95 

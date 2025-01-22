@@ -1,0 +1,34 @@
+examples:
+  - theorem: |
+      theorem some_theorem (n : ℕ) (h0 : 1 ≤ n) : n < 2^n := by
+    proof: |
+      induction' h0 with k h0 ih
+      norm_num 
+      rw [succ_eq_add_one] 
+      rw [pow_add, pow_one, mul_two] 
+      refine add_lt_add_of_lt_of_lt ih ?step.h₂ 
+      exact lt_of_le_of_lt h0 ih
+  
+  - theorem: |
+      theorem some_theorem' (b : ℝ) (f : ℝ → ℝ) (h0 : ∀ x, f x = 3 * x^4 - 7 * x^3 + 2 * x^2 - b * x + 1) (h1 : f 1 = 1) : b = -2 := by
+    proof: |
+      rw [h0] at h1
+      norm_num at h1
+      have h2 : (-2 - b) + b = 0 + b := by rw [←h1]
+      simp at h2
+      exact h2.symm
+
+  - theorem: |
+      theorem some_theorem'' : Int.floor ((9:ℝ) / 160 * 100) = 5 := by
+    proof: |
+      rw [Int.floor_eq_iff]
+      norm_num
+
+format: |
+  Theorem: {example.theorem}
+  
+  Proof:
+  {example.proof}
+  
+  Now prove this new theorem:
+  {theorem} 

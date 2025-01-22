@@ -1,0 +1,25 @@
+name: llama2-70b
+provider: local
+model_path: meta-llama/Llama-2-70b-chat-hf
+model_type: llama
+temperature: 0.7
+max_tokens: 2048
+top_p: 0.95
+
+# Model-specific settings
+tensor_parallel_size: 4  # Adjust based on available GPUs
+gpu_memory_utilization: 0.85
+max_num_batched_tokens: 4096
+
+# Prompt formatting
+system_prompt_prefix: "<s>[INST] <<SYS>>\n"
+system_prompt_suffix: "\n<</SYS>>\n\n"
+user_prompt_prefix: "[INST]"
+assistant_prompt_prefix: "[/INST]"
+prompt_separator: "\n\n"
+
+# Sampling settings
+top_k: 50
+repetition_penalty: 1.1
+presence_penalty: 0.0
+frequency_penalty: 0.0 

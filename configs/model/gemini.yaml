@@ -1,0 +1,6 @@
+name: gemini-pro
+provider: gemini
+temperature: 0.7
+top_p: 1.0 
+
+# TODO(George; 12/20): Modify to the right model

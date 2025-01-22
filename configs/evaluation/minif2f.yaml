@@ -1,0 +1,10 @@
+name: minif2f
+dataset:
+  path: data/minif2f/Problems
+  lean_project: true
+metrics:
+  - accuracy
+  - completion_rate
+  - time_to_solve
+max_attempts: 3
+timeout: 300  # seconds

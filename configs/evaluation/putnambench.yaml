@@ -1,0 +1,10 @@
+name: putnambench
+dataset:
+  path: data/putnambench
+  split: test
+metrics:
+  - accuracy
+  - completion_rate
+  - time_to_solve
+max_attempts: 3
+timeout: 300  # seconds 
