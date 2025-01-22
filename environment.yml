@@ -1,0 +1,30 @@
+name: ftpevals
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip>=23.0
+  - cudatoolkit=11.8
+  - pytorch=2.0.0
+  - pytorch-cuda=11.8
+  - pandas>=2.0.0
+  - numpy>=1.24.0
+  - pip:
+    - openai
+    - anthropic
+    - google-generativeai
+    - python-dotenv
+    - hydra-core
+    - omegaconf
+    - black
+    - isort
+    - pylint
+    - vllm
+    - transformers>=4.36.0
+    - accelerate>=0.21.0
+    - bitsandbytes>=0.41.0
+    - sentencepiece>=0.1.99
+    - tqdm>=4.65.0
