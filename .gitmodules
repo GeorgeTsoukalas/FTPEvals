@@ -1,6 +1,1 @@
-[submodule "data/putnambench"]
-	path = data/putnambench
-	url = https://github.com/trishullab/PutnamBench.git
-[submodule "imports/itp-interface"]
-	path = imports/itp-interface
-	url = https://github.com/trishullab/itp-interface
+[submodule "data/putnambench"]\n\tpath = data/putnambench\n\turl = https://github.com/trishullab/PutnamBench.git
