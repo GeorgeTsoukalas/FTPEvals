@@ -1,10 +1,13 @@
 name: putnambench
 dataset:
-  path: data/putnambench
+  path: data/putnambench/lean4/solutions_replaced_new
   split: test
 metrics:
   - accuracy
   - completion_rate
   - time_to_solve
 max_attempts: 3
-timeout: 300  # seconds 
+timeout: 300  # seconds
+batch_size: 16
+max_parallel_envs: 16
+max_proof_depth: 100

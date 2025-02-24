@@ -1,0 +1,27 @@
+run:
+  dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+job:
+  chdir: true
+
+hydra:
+  run:
+    dir: ${run.dir}
+  output_subdir: .hydra
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - hydra
+          - hydra_logging
+          - job_logging
+
+job_logging:
+  handlers:
+    file:
+      filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log
+
+hydra_logging:
+  handlers:
+    file:
+      filename: ${hydra.runtime.output_dir}/hydra.log 

@@ -1,17 +1,22 @@
 defaults:
   - _self_
-  - model: gpt4
+  - model: gpt4o-mini
   - evaluation: putnambench
-  - hydra: default
-  - override hydra/job_logging: colorlog
-  - override hydra/hydra_logging: colorlog
+  - prompts: default
 
 # Global configurations
 project:
   name: ftpevals
-  output_dir: ${hydra:runtime.output_dir}
-  log_dir: ${hydra:runtime.output_dir}/logs
+  output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  log_dir: ${project.output_dir}/logs
 
 # General settings
 seed: 42
-debug: false 
+debug: false
+
+# Hydra configurations
+hydra:
+  run:
+    dir: ${project.output_dir}
+  job:
+    chdir: true 
