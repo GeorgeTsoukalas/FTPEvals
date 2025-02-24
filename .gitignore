@@ -37,4 +37,22 @@ env/
 .idea/
 .vscode/
 *.swp
-*.swo 
+*.swo
+secrets/
+
+# Output and checkpoint directories
+outputs/
+checkpoints/
+results/
+wandb/
+
+# Cache directories
+.pytest_cache/
+.cache/
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+.DS_Store
