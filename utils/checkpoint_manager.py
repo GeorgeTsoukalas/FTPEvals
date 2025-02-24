@@ -80,8 +80,8 @@ class CheckpointManager:
     
     def get_remaining_problems(self) -> set:
         """Get the set of problems that still need to be evaluated"""
-        all_problems = set(str(i) for i in range(self.state["metadata"]["total_problems"]))
-        return all_problems - self.state["completed_problems"]
+        # We don't generate indices anymore, we use the actual problem IDs from the state
+        return set(range(self.state["metadata"]["total_problems"])) - self.state["completed_problems"]
     
     def get_progress_summary(self) -> Dict[str, Any]:
         """Get a summary of the evaluation progress"""
@@ -94,35 +94,36 @@ class CheckpointManager:
         }
     
     def export_results(self, output_dir: str = "results"):
-        """Export results to CSV and JSON formats"""
+        """Export results to a JSON file and CSV summary"""
         os.makedirs(output_dir, exist_ok=True)
         
-        # Create a timestamp for the export
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"results_{self.state['config']['model']['name']}_{timestamp}"
+        # Convert set to list for JSON serialization
+        export_state = self.state.copy()
+        export_state["completed_problems"] = list(export_state["completed_problems"])
         
-        # Export to JSON (complete state)
-        json_path = os.path.join(output_dir, f"{base_name}.json")
-        with open(json_path, 'w') as f:
-            json.dump(self.state, f, indent=2)
+        # Save full results as JSON
+        results_file = os.path.join(output_dir, "results.json")
+        with open(results_file, "w") as f:
+            json.dump(export_state, f, indent=2)
         
-        # Export to CSV (just the results)
+        # Create summary DataFrame
         df = pd.DataFrame(self.state["results"])
-        csv_path = os.path.join(output_dir, f"{base_name}.csv")
-        df.to_csv(csv_path, index=False)
-        
-        self.logger.info(f"Exported results to {json_path} and {csv_path}")
+        if not df.empty:
+            summary_file = os.path.join(output_dir, "summary.csv")
+            df.to_csv(summary_file, index=False)
     
     def _save_checkpoint(self):
-        """Save the current state to a checkpoint file"""
+        """Save current state to checkpoint file"""
         if not self.current_checkpoint:
-            raise ValueError("No active checkpoint")
-        
+            return
+            
         # Convert set to list for JSON serialization
-        state_copy = self.state.copy()
-        state_copy["completed_problems"] = list(self.state["completed_problems"])
+        checkpoint_state = self.state.copy()
+        checkpoint_state["completed_problems"] = list(checkpoint_state["completed_problems"])
         
-        with open(self.current_checkpoint, 'w') as f:
-            json.dump(state_copy, f, indent=2)
+        self.state["metadata"]["last_updated"] = datetime.now().isoformat()
+        self.state["metadata"]["completed_count"] = len(self.state["completed_problems"])
         
-        self.logger.debug(f"Saved checkpoint to {self.current_checkpoint}") 
+        self.logger.debug(f"Saved checkpoint to {self.current_checkpoint}")
+        with open(self.current_checkpoint, "w") as f:
+            json.dump(checkpoint_state, f, indent=2) 
