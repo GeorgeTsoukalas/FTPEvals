@@ -11,3 +11,5 @@ sentencepiece>=0.1.99
 pandas>=2.0.0
 numpy>=1.24.0
 tqdm>=4.65.0
+requests>=2.31.0
+itp-interface
