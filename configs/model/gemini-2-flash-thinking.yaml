@@ -1,0 +1,7 @@
+name: gemini-2.0-flash-thinking-exp-01-21
+provider: gemini
+temperature: 0.5
+max_tokens: 16384
+top_p: 0.8
+top_k: 40
+response_mime_type: text/plain 

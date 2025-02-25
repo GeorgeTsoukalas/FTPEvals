@@ -49,4 +49,8 @@ class Logger:
         self.logger.error(message)
     
     def critical(self, message):
-        self.logger.critical(message) 
+        self.logger.critical(message)
+        
+    def exception(self, message):
+        """Log an exception with traceback information."""
+        self.logger.exception(message) 
