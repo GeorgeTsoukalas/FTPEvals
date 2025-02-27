@@ -3,12 +3,13 @@ import os
 from datetime import datetime
 
 class Logger:
-    def __init__(self, name: str, log_dir: str = "logs"):
+    def __init__(self, name: str, log_dir: str = "logs", log_filename: str = "main", timestamp: str = None):
         self.name = name
         self.log_dir = log_dir
+        # File handler
+        self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S') if timestamp is None else timestamp
+        self.log_filename = log_filename
         
-        # Create logs directory if it doesn't exist
-        os.makedirs(log_dir, exist_ok=True)
         
         # Create logger
         self.logger = logging.getLogger(name)
@@ -19,10 +20,11 @@ class Logger:
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         
-        # File handler
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        full_log_dir = os.path.join(self.log_dir, self.name, self.timestamp)
+        # Create logs directory if it doesn't exist
+        os.makedirs(full_log_dir, exist_ok=True)
         file_handler = logging.FileHandler(
-            os.path.join(log_dir, f'{name}_{timestamp}.log')
+            os.path.join(full_log_dir, f'{self.log_filename}.log')
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
@@ -35,6 +37,13 @@ class Logger:
         # Add handlers
         self.logger.addHandler(file_handler)
         self.logger.addHandler(stream_handler)
+    
+    def clone_with(self, kwargs):
+        name = kwargs.get('name', self.name)
+        log_dir = kwargs.get('log_dir', self.log_dir)
+        log_filename = kwargs.get('log_filename', self.log_filename)
+        timestamp = kwargs.get('timestamp', self.timestamp)
+        return Logger(name, log_dir, log_filename, timestamp)
     
     def debug(self, message):
         self.logger.debug(message)
