@@ -23,6 +23,7 @@ dependencies:
     - isort
     - pylint
     - vllm
+    - itp-interface==1.1.5
     - transformers>=4.36.0
     - accelerate>=0.21.0
     - bitsandbytes>=0.41.0
