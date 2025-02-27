@@ -5,6 +5,7 @@ import time
 import logging
 import asyncio
 import ray
+import re
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from utils.checkpoint_manager import CheckpointManager
 
 from itp_interface.rl.proof_action import ProofAction
 from itp_interface.rl.simple_proof_env import ProofEnv, ProofEnvActor, ProofEnvInfo, ProofEnvReRankStrategy
+from itp_interface.tools.lean4_sync_executor import get_all_theorems_in_file
 from itp_interface.tools.proof_exec_callback import ProofExecutorCallback
 from itp_interface.rl.simple_proof_env_pool import ProofEnvPool
 
@@ -29,6 +31,8 @@ class ProofResult:
     proof: Optional[str] = None
 
 class BatchProofEvaluator:
+    theorem_match_pattern = re.compile(r"^\s*(theorem\s+[\s|\S]+?:=\s*sorry)", re.MULTILINE)
+    proof_extraction_pattern = re.compile(r"\[PROOF\]([\s|\S]+)\[END PROOF\]", re.MULTILINE)
     def __init__(
         self,
         model_caller: LLMCaller,
@@ -132,49 +136,45 @@ class BatchProofEvaluator:
         # Create proof executors for each problem
         env_actors = []
         # Read theorems from files
-        theorem_contents = {}
+        theorem_contents_per_file = {}
         for file_path in problem_files:
-            theorem_name = self._get_theorem_name(str(file_path))
+            theorems = get_all_theorems_in_file(file_path)
+            # Assuming run only for putnam bench
+            assert len(theorems) == 1, f"Expected exactly 1 theorem in file {file_path}"
+            theorem_name = theorems[0].theorem_name
             # Read the theorem content from the file
             with open(file_path, 'r') as f:
                 file_content = f.read()
                 
-                # Extract imports and open statements
-                import_lines = []
-                open_lines = []
-                for line in file_content.split('\n'):
-                    if line.strip().startswith('import '):
-                        import_lines.append(line)
-                    elif line.strip().startswith('open '):
-                        open_lines.append(line)
-                
-                # Extract only the theorem statement
-                theorem_lines = []
-                in_theorem = False
-                for line in file_content.split('\n'):
-                    if 'theorem' in line and not in_theorem:
-                        in_theorem = True
-                        # Replace the actual theorem name with "theorem problem"
-                        line = line.replace(f"theorem {theorem_name}", "theorem problem")
-                        theorem_lines.append(line)
-                    elif in_theorem and 'sorry' in line:
-                        break
-                    elif in_theorem:
-                        theorem_lines.append(line)
-                
-                # Combine imports, open statements, and theorem content
-                combined_content = []
-                if import_lines:
-                    combined_content.extend(import_lines)
-                if open_lines:
-                    combined_content.extend(open_lines)
-                if combined_content:
-                    combined_content.append("")  # Add a blank line for readability
-                combined_content.extend(theorem_lines)
-                
-                theorem_content = '\n'.join(combined_content)
-                self.logger.info(f"\n{'='*50}\nTheorem content for {theorem_name} with imports and open statements:\n{theorem_content}\n{'='*50}")
-                theorem_contents[theorem_name] = theorem_content
+            # Extract imports and open statements
+            import_lines = []
+            open_lines = []
+            for line in file_content.split('\n'):
+                if line.strip().startswith('import '):
+                    import_lines.append(line)
+                elif line.strip().startswith('open '):
+                    open_lines.append(line)
+            
+            # Extract only the theorem statement
+            theorem_statements = BatchProofEvaluator.theorem_match_pattern.findall(file_content)
+            assert len(theorem_statements) == 1, f"Expected exactly 1 theorem statement in file {file_path}"
+            theorem_statement : str = theorem_statements[0]
+            theorem_statement = theorem_statement.replace(theorem_name, "problem")            
+            # Combine imports, open statements, and theorem content
+            combined_content = []
+            if import_lines:
+                combined_content.extend(import_lines)
+            if open_lines:
+                combined_content.extend(open_lines)
+            if combined_content:
+                combined_content.append("")  # Add a blank line for readability
+            combined_content.append(theorem_statement)  # Add the theorem statement
+            
+            theorem_content = '\n'.join(combined_content)
+            self.logger.info(f"\n{'='*50}\nTheorem content for {theorem_name} with imports and open statements:\n{theorem_content}\n{'='*50}")
+            theorem_details = theorem_contents_per_file.get(file_path, {})
+            theorem_details[theorem_name] = {"name": theorem_name, "content": theorem_content}
+            theorem_contents_per_file[file_path] = theorem_details
                 
             proof_exec = self._create_proof_executor(str(file_path))  # Convert Path to string
             
@@ -198,113 +198,98 @@ class BatchProofEvaluator:
         )
         
         try:
-            with pool:
-                # Generate proofs for all problems in parallel
-                proof_tasks = []
-                for file_path in problem_files:
-                    theorem_name = self._get_theorem_name(str(file_path))
-                    # Pass the theorem content and system prompt
-                    task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_contents[theorem_name], system_prompt)
-                    proof_tasks.append(task)
-                
-                proofs = await asyncio.gather(*proof_tasks)
-                
-                # Verify proofs using the pool
-                for i, (proof, generation_success) in enumerate(proofs):
-                    start_time = time.time()
-                    theorem_name = self._get_theorem_name(str(problem_files[i]))
+            theorem_details_list = []
+            # Generate proofs for all problems in parallel
+            proof_tasks = []
+            for file_path in problem_files:
+                # theorem_name = self._get_theorem_name(str(file_path))
+                # Pass the theorem content and system prompt
+                theorem_details = theorem_contents_per_file[file_path]
+                theorem_content = theorem_details[theorem_name]["content"]
+                theorem_name = theorem_details[theorem_name]["name"]
+                theorem_details_list.append(theorem_details)
+                # Note the name has been changed in content
+                assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
+                task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
+                proof_tasks.append(task)
+            
+            proofs = await asyncio.gather(*proof_tasks)
+            extracted_proofs = []
+            extracted_env_ids = []
+            extracted_theorem_names = []
+            for i, (proof, generation_success) in enumerate(proofs):
+                start_time = time.time()
+                theorem_name = theorem_details_list[i][theorem_name]["name"]
+                if not generation_success:
+                    results.append(ProofResult(
+                        theorem_name=theorem_name,
+                        success=False,
+                        time_taken=time.time() - start_time,
+                        error_message="Failed to generate proof"
+                    ))
+                    continue
                     
-                    try:
-                        if not generation_success:
-                            results.append(ProofResult(
-                                theorem_name=theorem_name,
-                                success=False,
-                                time_taken=time.time() - start_time,
-                                error_message="Failed to generate proof"
-                            ))
-                            continue
-                        
-                        # Extract proof from between [PROOF] and [END PROOF] delimiters if present
-                        extracted_proof = proof
-                        if "[PROOF]" in proof and "[END PROOF]" in proof:
-                            start_idx = proof.find("[PROOF]") + len("[PROOF]")
-                            end_idx = proof.find("[END PROOF]")
-                            if start_idx < end_idx:
-                                extracted_proof = proof[start_idx:end_idx].strip()
-                                
-                                # Remove any theorem declaration line if present
-                                lines = extracted_proof.split('\n')
-                                if any(line.strip().startswith("theorem") for line in lines):
-                                    # Find the first line that doesn't start with "theorem" or isn't empty
-                                    start_line = 0
-                                    for idx, line in enumerate(lines):
-                                        if line.strip().startswith("theorem"):
-                                            start_line = idx + 1
-                                            # If the line ends with ":= by", skip to the next line
-                                            if ":= by" in line:
-                                                start_line += 1
-                                            break
-                                    
-                                    # Extract only the proof tactics
-                                    extracted_proof = '\n'.join(lines[start_line:])
-                        else:
-                            # Log an error if the model doesn't use the required delimiters
-                            error_msg = f"Model response for {theorem_name} does not contain the required [PROOF] and [END PROOF] delimiters"
-                            self.logger.error(error_msg)
-                            results.append(ProofResult(
-                                theorem_name=theorem_name,
-                                success=False,
-                                time_taken=time.time() - start_time,
-                                error_message=error_msg
-                            ))
-                            continue
-                        
-                        # Create a single action with all tactics
-                        action = ProofAction(
-                            ProofAction.ActionType.RUN_TACTIC,
-                            ProofAction.Language.LEAN4,
-                            tactics=[extracted_proof]  # Pass the extracted proof as a single tactic
-                        )
-                        
-                        # Execute action
-                        success = True
+                # Extract proof from between [PROOF] and [END PROOF] delimiters if present
+                extracted_proof = BatchProofEvaluator.proof_extraction_pattern.findall(proof)
+                if len(extracted_proof) == 1:
+                    extracted_proof: str = extracted_proof[0].strip()
+                    if extracted_proof.startswith(":="):
+                        # If the proof starts with ":=", remove it
+                        extracted_proof = extracted_proof[len(":="):].strip()
+                    if extracted_proof.startswith("by "): # Note 'by' is not sufficient because there are tactics like 'by_cases'
+                        # If the proof starts with "by", remove it
+                        extracted_proof = extracted_proof[len("by"):].strip()
+                    extracted_proofs.append(ProofAction(
+                        ProofAction.ActionType.RUN_TACTIC, 
+                        ProofAction.Language.LEAN4, 
+                        tactics=[extracted_proof])) # TODO fix to execute not beyond the proof completion or first failure
+                    extracted_env_ids.append(i)
+                    extracted_theorem_names.append(theorem_name)
+                else:
+                    # Log an error if the model doesn't use the required delimiters
+                    error_msg = f"Model response for {theorem_name} does not contain the required [PROOF] and [END PROOF] delimiters"
+                    self.logger.error(error_msg)
+                    results.append(ProofResult(
+                        theorem_name=theorem_name,
+                        success=False,
+                        time_taken=time.time() - start_time,
+                        error_message=error_msg
+                    ))
+
+            with pool:
+                # Parallely verify proofs using the pool
+                try:                   
+                    step_results = pool.step(extracted_proofs, extracted_env_ids)
+                    for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
+                        # Handle the case where info might be None
+                        success = done
                         error_message = None
+                        if info is None:
+                            success = False
+                            error_message = "Proof verification failed: Lean server error or timeout"
+                            self.logger.error(f"Received None info object during proof verification for {theorem_name}")                            
+                        if info.error_message:
+                            success = False
+                            error_message = info.error_message
                         
-                        step_results = pool.step([action], [i])
-                        for state, act, new_state, reward, done, info in step_results:
-                            # Handle the case where info might be None
-                            if info is None:
-                                success = False
-                                error_message = "Proof verification failed: Lean server error or timeout"
-                                self.logger.error(f"Received None info object during proof verification for {theorem_name}")
-                                break
-                                
-                            if info.error_message:
-                                success = False
-                                error_message = info.error_message
-                            if done:
-                                break
-                        
+                        theorem_name = extracted_theorem_names[thm_idx]
                         results.append(ProofResult(
                             theorem_name=theorem_name,
                             success=success,
                             time_taken=time.time() - start_time,
                             proof=extracted_proof if success else None,
-                            error_message=error_message
-                        ))
-                    except Exception as e:
-                        # Catch any unexpected errors during the evaluation of this problem
-                        error_message = f"Unexpected error during evaluation: {str(e)}"
-                        self.logger.exception(f"Error evaluating {theorem_name}: {error_message}")
-                        
-                        # Add a failed result for this problem
-                        results.append(ProofResult(
-                            theorem_name=theorem_name,
-                            success=False,
-                            time_taken=time.time() - start_time,
-                            error_message=error_message
-                        ))
-        
+                            error_message=error_message))
+                except Exception as e:
+                    # Catch any unexpected errors during the evaluation of this problem
+                    error_message = f"Unexpected error during evaluation: {str(e)}"
+                    self.logger.exception(f"Error evaluating {theorem_name}: {error_message}")
+                    
+                    # Add a failed result for this problem
+                    results.append(ProofResult(
+                        theorem_name=theorem_name,
+                        success=False,
+                        time_taken=time.time() - start_time,
+                        error_message=error_message))        
         except Exception as e:
             # Catch any unexpected errors during the batch evaluation
             self.logger.exception(f"Unexpected error during batch evaluation: {str(e)}")
@@ -319,7 +304,6 @@ class BatchProofEvaluator:
                         time_taken=0.0,
                         error_message=f"Evaluation skipped due to batch error: {str(e)}"
                     ))
-        
         finally:
             # Cleanup
             for env_actor in env_actors:
@@ -434,18 +418,35 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     
     logger.info(f"Remaining problems to evaluate: {len(remaining_problems)}")
     logger.info(f"First few problems to evaluate: {[p.name for p in remaining_problems[:5]]}")
+
+    error_retry_count = 0
+    max_error_retries = 10
+    backoff_time = 10  # seconds
+    exp_backoff = 1.25  # exponential backoff factor
     
     # Process problems in batches
     for i in range(0, len(remaining_problems), cfg.evaluation.batch_size):
         batch_problems = remaining_problems[i:i + cfg.evaluation.batch_size]
         
-        # Evaluate batch
-        results = await evaluator.evaluate_batch(
-            problem_files=batch_problems,
-            prompt_template=cfg.prompts.template,
-            model_config=cfg.model,
-            system_prompt=cfg.prompts.system_prompt if hasattr(cfg.prompts, "system_prompt") else None
-        )
+        while error_retry_count < max_error_retries:
+            try:
+                # Evaluate batch
+                results = await evaluator.evaluate_batch(
+                    problem_files=batch_problems,
+                    prompt_template=cfg.prompts.template,
+                    model_config=cfg.model,
+                    system_prompt=cfg.prompts.system_prompt if hasattr(cfg.prompts, "system_prompt") else None
+                )
+                error_retry_count = 0  # Reset error retry count
+                backoff_time = 10  # Reset backoff time
+                break
+            except Exception as e:
+                logger.exception(f"Unhandled exception occurred while evaluating batch: {e}")
+                error_retry_count += 1
+                logger.info(f"Retrying in {backoff_time} seconds...")
+                time.sleep(backoff_time)
+                backoff_time *= exp_backoff
+
         
         # Save results
         for problem_idx, (problem_file, result) in enumerate(zip(batch_problems, results)):
