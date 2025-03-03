@@ -436,7 +436,7 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     # Filter out the problems that have already been completed
     # This ensures we maintain the priority order
     remaining_problems_idx = [problems_idxs[i] for i in range(len(problems_idxs)) 
-    if problems_idxs[i] not in completed_problem_ids or completed_problem_ids[problems_idxs[i]] < checkpoint_manager.max_attempts][:5]
+    if problems_idxs[i] not in completed_problem_ids or completed_problem_ids[problems_idxs[i]] < checkpoint_manager.max_attempts]
     
     logger.info(f"Remaining problems to evaluate: {len(remaining_problems_idx)}")
     logger.info(f"First few problems to evaluate: {[all_problem_names[idx] for idx in remaining_problems_idx[:5]]}")
