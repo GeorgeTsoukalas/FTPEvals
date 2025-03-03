@@ -6,7 +6,7 @@ metrics:
   - accuracy
   - completion_rate
   - time_to_solve
-max_attempts: 3
+max_attempts: 1
 timeout: 300  # seconds
 batch_size: 16
 max_parallel_envs: 16

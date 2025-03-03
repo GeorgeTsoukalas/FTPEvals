@@ -17,10 +17,17 @@ from utils.logging_utils import Logger
 from utils.checkpoint_manager import CheckpointManager
 
 from itp_interface.rl.proof_action import ProofAction
-from itp_interface.rl.simple_proof_env import ProofEnv, ProofEnvActor, ProofEnvInfo, ProofEnvReRankStrategy
+from itp_interface.rl.simple_proof_env import ProgressState, ProofEnvActor, ProofEnvInfo, ProofEnvReRankStrategy
 from itp_interface.tools.lean4_sync_executor import get_all_theorems_in_file
 from itp_interface.tools.proof_exec_callback import ProofExecutorCallback
 from itp_interface.rl.simple_proof_env_pool import ProofEnvPool
+
+class RetriableError(Exception):
+    def __init__(self, exception: Exception):
+        self.exception = exception
+    
+    def __str__(self):
+        return f"RetriableError: {str(self.exception)}"
 
 @dataclass
 class ProofResult:
@@ -33,6 +40,7 @@ class ProofResult:
 class BatchProofEvaluator:
     theorem_match_pattern = re.compile(r"^\s*(theorem\s+[\s|\S]+?:=\s*sorry)", re.MULTILINE)
     proof_extraction_pattern = re.compile(r"\[PROOF\]([\s|\S]+)\[END PROOF\]", re.MULTILINE)
+    proof_already_complete_error_message = "error: no goals to be solved"
     def __init__(
         self,
         model_caller: LLMCaller,
@@ -199,102 +207,26 @@ class BatchProofEvaluator:
             max_parallel_envs=self.max_parallel_envs
         )
 
-        try:
-            theorem_details_list = []
-            # Generate proofs for all problems in parallel
-            proof_tasks = []
-            for file_path in problem_files:
-                # Pass the theorem content and system prompt
-                all_theorem_details = theorem_contents_per_file[file_path]
-                for theorem_name, theorem_details in all_theorem_details.items():
-                    theorem_content = theorem_details["content"]
-                    theorem_name = theorem_details["name"]
-                    theorem_details_list.append(theorem_details)
-                    # Note the name has been changed in content
-                    assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
-                    task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
-                    proof_tasks.append(task)
+        theorem_details_list = []
+        # Generate proofs for all problems in parallel
+        proof_tasks = []
+        for file_path in problem_files:
+            # Pass the theorem content and system prompt
+            all_theorem_details = theorem_contents_per_file[file_path]
+            for theorem_name, theorem_details in all_theorem_details.items():
+                theorem_content = theorem_details["content"]
+                theorem_name = theorem_details["name"]
+                theorem_details_list.append(theorem_details)
+                # Note the name has been changed in content
+                assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
+                task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
+                proof_tasks.append(task)
             
+        try:
             proofs = await asyncio.gather(*proof_tasks)
-            extracted_proofs = []
-            extracted_env_ids = []
-            extracted_theorem_names = []
-            for i, (proof, generation_success) in enumerate(proofs):
-                start_time = time.time()
-                theorem_name = theorem_details_list[i]["name"]
-                if not generation_success:
-                    results.append(ProofResult(
-                        theorem_name=theorem_name,
-                        success=False,
-                        time_taken=time.time() - start_time,
-                        error_message="Failed to generate proof"
-                    ))
-                    continue
-                    
-                # Extract proof from between [PROOF] and [END PROOF] delimiters if present
-                extracted_proof = BatchProofEvaluator.proof_extraction_pattern.findall(proof)
-                if len(extracted_proof) == 1:
-                    extracted_proof: str = extracted_proof[0].strip()
-                    if extracted_proof.startswith(":="):
-                        # If the proof starts with ":=", remove it
-                        extracted_proof = extracted_proof[len(":="):].strip()
-                    if extracted_proof.startswith("by "): # Note 'by' is not sufficient because there are tactics like 'by_cases'
-                        # If the proof starts with "by", remove it
-                        extracted_proof = extracted_proof[len("by"):].strip()
-                    extracted_proofs.append(ProofAction(
-                        ProofAction.ActionType.RUN_TACTIC, 
-                        ProofAction.Language.LEAN4, 
-                        tactics=[extracted_proof])) # TODO fix to execute not beyond the proof completion or first failure
-                    extracted_env_ids.append(i)
-                    extracted_theorem_names.append(theorem_name)
-                else:
-                    # Log an error if the model doesn't use the required delimiters
-                    error_msg = f"Model response for {theorem_name} does not contain the required [PROOF] and [END PROOF] delimiters"
-                    self.logger.error(error_msg)
-                    results.append(ProofResult(
-                        theorem_name=theorem_name,
-                        success=False,
-                        time_taken=time.time() - start_time,
-                        error_message=error_msg
-                    ))
-
-            with pool:
-                # Parallely verify proofs using the pool
-                try:                   
-                    step_results = pool.step(extracted_proofs, extracted_env_ids)
-                    for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
-                        # Handle the case where info might be None
-                        success = done
-                        error_message = None
-                        if info is None:
-                            success = False
-                            error_message = "Proof verification failed: Lean server error or timeout"
-                            self.logger.error(f"Received None info object during proof verification for {theorem_name}")                            
-                        if info.error_message:
-                            success = False
-                            error_message = info.error_message
-                        
-                        theorem_name = extracted_theorem_names[thm_idx]
-                        results.append(ProofResult(
-                            theorem_name=theorem_name,
-                            success=success,
-                            time_taken=time.time() - start_time,
-                            proof=extracted_proof if success else None,
-                            error_message=error_message))
-                except Exception as e:
-                    # Catch any unexpected errors during the evaluation of this problem
-                    error_message = f"Unexpected error during evaluation: {str(e)}"
-                    self.logger.exception(f"Error evaluating {theorem_name}: {error_message}")
-                    
-                    # Add a failed result for this problem
-                    results.append(ProofResult(
-                        theorem_name=theorem_name,
-                        success=False,
-                        time_taken=time.time() - start_time,
-                        error_message=error_message))        
         except Exception as e:
             # Catch any unexpected errors during the batch evaluation
-            self.logger.exception(f"Unexpected error during batch evaluation: {str(e)}")
+            self.logger.exception(f"Unexpected error during proof generation: {str(e)}")
             # For any problems that haven't been processed yet, add failed results
             processed_theorems = [result.theorem_name for result in results]
             for file_path in problem_files:
@@ -306,14 +238,91 @@ class BatchProofEvaluator:
                         time_taken=0.0,
                         error_message=f"Evaluation skipped due to batch error: {str(e)}"
                     ))
-        finally:
-            # Cleanup
-            for env_actor in env_actors:
-                try:
-                    ray.kill(env_actor)
-                except (ValueError, AttributeError):
-                    # Skip cleanup for mock objects in tests
-                    pass
+            # Retriable because the failure here will happen due to API failure or throttling
+            # And we can retry proof generation for such failures
+            raise RetriableError(e)
+
+        extracted_proofs = []
+        extracted_env_ids = []
+        extracted_theorem_names = []
+        for i, (proof, generation_success) in enumerate(proofs):
+            start_time = time.time()
+            theorem_name = theorem_details_list[i]["name"]
+            if not generation_success:
+                results.append(ProofResult(
+                    theorem_name=theorem_name,
+                    success=False,
+                    time_taken=time.time() - start_time,
+                    error_message="Failed to generate proof"
+                ))
+                continue
+                
+            # Extract proof from between [PROOF] and [END PROOF] delimiters if present
+            extracted_proof = BatchProofEvaluator.proof_extraction_pattern.findall(proof)
+            if len(extracted_proof) == 1:
+                extracted_proof: str = extracted_proof[0].strip()
+                if extracted_proof.startswith(":="):
+                    # If the proof starts with ":=", remove it
+                    extracted_proof = extracted_proof[len(":="):].strip()
+                if extracted_proof.startswith("by "): # Note 'by' is not sufficient because there are tactics like 'by_cases'
+                    # If the proof starts with "by", remove it
+                    extracted_proof = extracted_proof[len("by"):].strip()
+                extracted_proofs.append(ProofAction(
+                    ProofAction.ActionType.RUN_TACTIC, 
+                    ProofAction.Language.LEAN4, 
+                    tactics=[extracted_proof])) # TODO fix to execute not beyond the proof completion or first failure
+                extracted_env_ids.append(i)
+                extracted_theorem_names.append(theorem_name)
+            else:
+                # Log an error if the model doesn't use the required delimiters
+                error_msg = f"Model response for {theorem_name} does not contain the required [PROOF] and [END PROOF] delimiters"
+                self.logger.error(error_msg)
+                results.append(ProofResult(
+                    theorem_name=theorem_name,
+                    success=False,
+                    time_taken=time.time() - start_time,
+                    error_message=error_msg
+                ))
+
+        with pool:
+            # Parallely verify proofs using the pool
+            try:                   
+                step_results = pool.step(extracted_proofs, extracted_env_ids)
+                for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
+                    # Handle the case where info might be None
+                    success = done
+                    error_message = None
+                    info : ProofEnvInfo = info
+                    if info is None:
+                        success = False
+                        error_message = "Proof verification failed: Lean server error or timeout"
+                        self.logger.error(f"Received None info object during proof verification for {theorem_name}")                            
+                    if info.error_message and info.error_message != BatchProofEvaluator.proof_already_complete_error_message:
+                        success = False
+                        error_message = info.error_message
+                    else:
+                        success = True
+                        info.progress = ProgressState.DONE
+                        info.info_messages.append(BatchProofEvaluator.proof_already_complete_error_message)
+                    
+                    theorem_name = extracted_theorem_names[thm_idx]
+                    results.append(ProofResult(
+                        theorem_name=theorem_name,
+                        success=success,
+                        time_taken=time.time() - start_time,
+                        proof=extracted_proof if success else None,
+                        error_message=error_message))
+            except Exception as e:
+                # Catch any unexpected errors during the evaluation of this problem
+                error_message = f"Unexpected error during evaluation: {str(e)}"
+                self.logger.exception(f"Error evaluating {theorem_name}: {error_message}")
+                
+                # Add a failed result for this problem
+                results.append(ProofResult(
+                    theorem_name=theorem_name,
+                    success=False,
+                    time_taken=time.time() - start_time,
+                    error_message=error_message))
         
         return results
 
@@ -422,11 +431,12 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
             checkpoint_manager.state["metadata"]["total_problems"] = total_problems
     
     # Get IDs of completed problems
-    completed_problem_ids = checkpoint_manager.state["completed_problems"]
+    completed_problem_ids : Dict[int, int] = checkpoint_manager.state["completed_problems"]
     
     # Filter out the problems that have already been completed
     # This ensures we maintain the priority order
-    remaining_problems_idx = [problems_idxs[i] for i in range(len(problems_idxs)) if problems_idxs[i] not in completed_problem_ids]
+    remaining_problems_idx = [problems_idxs[i] for i in range(len(problems_idxs)) 
+    if problems_idxs[i] not in completed_problem_ids or completed_problem_ids[problems_idxs[i]] < checkpoint_manager.max_attempts][:5]
     
     logger.info(f"Remaining problems to evaluate: {len(remaining_problems_idx)}")
     logger.info(f"First few problems to evaluate: {[all_problem_names[idx] for idx in remaining_problems_idx[:5]]}")
@@ -453,8 +463,8 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
                 error_retry_count = 0  # Reset error retry count
                 backoff_time = 10  # Reset backoff time
                 break
-            except Exception as e:
-                logger.exception(f"Unhandled exception occurred while evaluating batch: {e}")
+            except RetriableError as e:
+                logger.exception(f"Unhandled retriable error: {str(e)}")
                 error_retry_count += 1
                 logger.info(f"Retrying in {backoff_time} seconds...")
                 time.sleep(backoff_time)
@@ -485,9 +495,12 @@ def main(cfg: DictConfig) -> None:
     logger = Logger(cfg.project.name)
     logger.info("Starting FTPEvals")
     logger.info(f"Configuration:\n{OmegaConf.to_yaml(cfg)}")
-    
+
+    max_attempts = 1
+    if hasattr(cfg.evaluation, "max_attempts"):
+        max_attempts = cfg.evaluation.max_attempts    
     # Initialize checkpoint manager
-    checkpoint_manager = CheckpointManager()
+    checkpoint_manager = CheckpointManager(max_attempts=max_attempts)
     
     # Check if a specific checkpoint file is provided
     if hasattr(cfg, "checkpoint_file") and cfg.checkpoint_file:
@@ -500,8 +513,11 @@ def main(cfg: DictConfig) -> None:
             checkpoint_manager.state["completed_problems"] = set(checkpoint_manager.state["completed_problems"])
         logger.info(f"Loaded checkpoint with {len(checkpoint_manager.state['completed_problems'])} completed problems")
     
+
     # Run evaluation
-    asyncio.run(evaluate_benchmark(cfg, logger, checkpoint_manager))
+    for attempt in range(max_attempts):
+        logger.info(f"Starting evaluation attempt {attempt + 1}/{max_attempts}")
+        asyncio.run(evaluate_benchmark(cfg, logger, checkpoint_manager))
 
 if __name__ == "__main__":
     # Add current directory to PYTHONPATH
