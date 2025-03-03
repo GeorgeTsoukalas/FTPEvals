@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 class Logger:
-    def __init__(self, name: str, log_dir: str = "logs", log_filename: str = "main", timestamp: str = None):
+    def __init__(self, name: str, log_dir: str = "logs", log_filename: str = "main.log", timestamp: str = None):
         self.name = name
         self.log_dir = log_dir
         # File handler
@@ -13,7 +13,7 @@ class Logger:
         
         # Create logger
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         
         # Create formatter
         formatter = logging.Formatter(
@@ -24,21 +24,15 @@ class Logger:
         # Create logs directory if it doesn't exist
         os.makedirs(full_log_dir, exist_ok=True)
         file_handler = logging.FileHandler(
-            os.path.join(full_log_dir, f'{self.log_filename}.log')
+            os.path.join(full_log_dir, f'{self.log_filename}')
         )
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(formatter)
-        
-        # Stream handler
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(logging.INFO)
-        stream_handler.setFormatter(formatter)
         
         # Add handlers
         self.logger.addHandler(file_handler)
-        self.logger.addHandler(stream_handler)
     
-    def clone_with(self, kwargs):
+    def clone_with(self, **kwargs):
         name = kwargs.get('name', self.name)
         log_dir = kwargs.get('log_dir', self.log_dir)
         log_filename = kwargs.get('log_filename', self.log_filename)

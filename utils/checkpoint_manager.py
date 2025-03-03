@@ -124,6 +124,6 @@ class CheckpointManager:
         self.state["metadata"]["last_updated"] = datetime.now().isoformat()
         self.state["metadata"]["completed_count"] = len(self.state["completed_problems"])
         
-        self.logger.debug(f"Saved checkpoint to {self.current_checkpoint}")
+        self.logger.info(f"Saved checkpoint to {self.current_checkpoint}")
         with open(self.current_checkpoint, "w") as f:
             json.dump(checkpoint_state, f, indent=2) 

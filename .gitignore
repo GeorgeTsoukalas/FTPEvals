@@ -58,3 +58,4 @@ wandb/
 .DS_Store
 
 .conda/
+nohup.out

@@ -41,10 +41,6 @@ sudo ln -sf <conda_path>/envs/ftpevals/bin/pip /usr/bin/pip
 
 
 6. Set up API keys:
-Create a `.env` file or set environment variables for:
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GOOGLE_API_KEY`
-- `DEEPSEEK_API_KEY`
-
+Create a file named `secrets/openai.key` in with the key for the OpenAI API.
+Similarly, for other APIs, create files named `secrets/<provider_name>.key` with the key for the respective API.
 

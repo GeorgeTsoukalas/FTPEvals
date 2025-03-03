@@ -64,10 +64,12 @@ class BatchProofEvaluator:
             else:
                 # If it already contains solutions_replaced_new, make sure it's absolute
                 file_path = os.path.join(self.project_root, os.path.basename(file_path))
-        
+
+        abs_project_root = os.path.abspath(self.project_root)
+        abs_file_path = os.path.abspath(file_path)        
         return ProofExecutorCallback(
-            project_folder=self.project_root,
-            file_path=file_path,
+            project_folder=abs_project_root,
+            file_path=abs_file_path,
             language=ProofAction.Language.LEAN4,
             always_use_retrieval=False,
             keep_local_context=True
@@ -176,42 +178,42 @@ class BatchProofEvaluator:
             theorem_details[theorem_name] = {"name": theorem_name, "content": theorem_content}
             theorem_contents_per_file[file_path] = theorem_details
                 
-            proof_exec = self._create_proof_executor(str(file_path))  # Convert Path to string
-            
+            proof_exec_callback = self._create_proof_executor(str(file_path))  # Convert Path to string
+
             # Create ProofEnvActor for each problem
             env_actor = ProofEnvActor.remote(
-                "test",
-                proof_exec,
-                theorem_name,
-                retrieval_strategy=ProofEnvReRankStrategy.NO_RE_RANK,
-                max_proof_depth=self.max_proof_depth,
-                always_retrieve_thms=False,
-                logger=self.logger
-            )
+                f"test_{theorem_name}", 
+                proof_exec_callback, 
+                theorem_name, 
+                retrieval_strategy=ProofEnvReRankStrategy.NO_RE_RANK, 
+                max_proof_depth=self.max_proof_depth, 
+                always_retrieve_thms=False, 
+                logger=self.logger, 
+                should_load_env=False)
             env_actors.append(env_actor)
         
         # Create ProofEnvPool
         pool = ProofEnvPool(
-            proof_env_actors=env_actors,
-            logger=self.logger,
+            proof_env_actors=env_actors, 
+            logger=self.logger, 
             max_parallel_envs=self.max_parallel_envs
         )
-        
+
         try:
             theorem_details_list = []
             # Generate proofs for all problems in parallel
             proof_tasks = []
             for file_path in problem_files:
-                # theorem_name = self._get_theorem_name(str(file_path))
                 # Pass the theorem content and system prompt
-                theorem_details = theorem_contents_per_file[file_path]
-                theorem_content = theorem_details[theorem_name]["content"]
-                theorem_name = theorem_details[theorem_name]["name"]
-                theorem_details_list.append(theorem_details)
-                # Note the name has been changed in content
-                assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
-                task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
-                proof_tasks.append(task)
+                all_theorem_details = theorem_contents_per_file[file_path]
+                for theorem_name, theorem_details in all_theorem_details.items():
+                    theorem_content = theorem_details["content"]
+                    theorem_name = theorem_details["name"]
+                    theorem_details_list.append(theorem_details)
+                    # Note the name has been changed in content
+                    assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
+                    task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
+                    proof_tasks.append(task)
             
             proofs = await asyncio.gather(*proof_tasks)
             extracted_proofs = []
@@ -219,7 +221,7 @@ class BatchProofEvaluator:
             extracted_theorem_names = []
             for i, (proof, generation_success) in enumerate(proofs):
                 start_time = time.time()
-                theorem_name = theorem_details_list[i][theorem_name]["name"]
+                theorem_name = theorem_details_list[i]["name"]
                 if not generation_success:
                     results.append(ProofResult(
                         theorem_name=theorem_name,
@@ -319,7 +321,7 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     """Evaluate the model on a benchmark dataset using batched processing."""
     
     # Initialize model caller
-    model_caller = LLMCaller(model_config=cfg.model)
+    model_caller = LLMCaller(model_config=cfg.model, logger=logger)
     
     # Log the system prompt if it exists
     if hasattr(cfg.prompts, "system_prompt"):
@@ -357,6 +359,18 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     
     # Filter for only Putnam problems (exclude test files)
     all_problems = [p for p in solutions_dir.glob("*.lean") if p.stem.startswith("putnam_")]
+    # It is important to sort the problems to maintain the order of problems
+    # So that we can start from the same checkpoint problem
+    all_problems.sort(key=lambda x: str(x)) 
+    
+    #It is important to convert the byte string to string because other libraries use string
+    all_problem_names = [str(p.name) for p in all_problems]
+    # Print all available problems for debugging
+    logger.info(f"All available problems: {all_problem_names}")
+
+    # Covert POSIX paths to strings, this helps in not running into byte and string comparison issues
+    # Best to keep everything as string
+    all_problems = [str(p) for p in all_problems]
     
     # Define priority problems with their exact filenames
     priority_problems = [
@@ -369,39 +383,37 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
         "putnam_1986_a1_sol.lean",
         "putnam_1990_a1_sol.lean"
     ]
-    
-    # Print all available problems for debugging
-    all_problem_names = [p.name for p in all_problems]
-    logger.info(f"All available problems: {all_problem_names}")
-    
+     
+    # Create a uniform problem_idx so that we don't rework and query the idx everytime for checkpoint, logging, etc.
+    # It avoid complication of maintaining two indices and then remapping them at the end to save checkpoints.
+    # Reverse lookup so that we don't do O(n) lookup everytime
+    problem_name_to_idx = {problem_name: idx for idx, problem_name in enumerate(all_problem_names)}
+    priority_problem_idxs = [problem_name_to_idx[p] for p in priority_problems if p in problem_name_to_idx]
+    priority_problems_found = [all_problem_names[idx] for idx in priority_problem_idxs]
+    priority_problems_not_found = [p for p in priority_problems if p not in set(priority_problems_found)]
+    if len(priority_problem_idxs) != len(priority_problems):
+        logger.warning("Some priority problems not found in dataset")
+        logger.warning(f"Priority problems not found: {priority_problems_not_found}")
+  
     # Reorder problems to prioritize the specified ones
-    problems = []
-    
-    # First add the priority problems in the specified order if they exist
-    for problem_name in priority_problems:
-        matching_problems = [p for p in all_problems if p.name == problem_name]
-        if matching_problems:
-            problems.extend(matching_problems)
-            # Remove from all_problems to avoid duplicates
-            all_problems = [p for p in all_problems if p.name != problem_name]
-        else:
-            logger.warning(f"Priority problem {problem_name} not found in dataset")
+    problems_idxs = list([idx for idx in range(len(all_problem_names)) if idx not in set(priority_problem_idxs)])
+    problems_idxs = priority_problem_idxs + problems_idxs
     
     # Then add the remaining problems
-    problems.extend(all_problems)
+    problems = [all_problems[i] for i in problems_idxs]
+    problem_names = [all_problem_names[i] for i in problems_idxs]
     
-    logger.info(f"Found problems: {[p.name for p in problems]}")
+    logger.info(f"Found problems: {[p for p in problem_names]}")
     total_problems = len(problems)
     
     logger.info(f"Found {total_problems} problems in {solutions_dir}")
-    logger.info(f"Priority problems found: {[p.name for p in problems if p.name in priority_problems]}")
+    logger.info(f"Priority problems found: {priority_problems_found}")
     
     # Initialize or load checkpoint
     if not checkpoint_manager.current_checkpoint:
         checkpoint_manager.initialize_run(
             config=OmegaConf.to_container(cfg, resolve=True),
-            total_problems=total_problems
-        )
+            total_problems=total_problems)
     else:
         logger.info(f"Using existing checkpoint: {checkpoint_manager.current_checkpoint}")
         # Update total_problems in the checkpoint if needed
@@ -414,10 +426,10 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     
     # Filter out the problems that have already been completed
     # This ensures we maintain the priority order
-    remaining_problems = [problems[i] for i in range(len(problems)) if i not in completed_problem_ids]
+    remaining_problems_idx = [problems_idxs[i] for i in range(len(problems_idxs)) if problems_idxs[i] not in completed_problem_ids]
     
-    logger.info(f"Remaining problems to evaluate: {len(remaining_problems)}")
-    logger.info(f"First few problems to evaluate: {[p.name for p in remaining_problems[:5]]}")
+    logger.info(f"Remaining problems to evaluate: {len(remaining_problems_idx)}")
+    logger.info(f"First few problems to evaluate: {[all_problem_names[idx] for idx in remaining_problems_idx[:5]]}")
 
     error_retry_count = 0
     max_error_retries = 10
@@ -425,8 +437,9 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     exp_backoff = 1.25  # exponential backoff factor
     
     # Process problems in batches
-    for i in range(0, len(remaining_problems), cfg.evaluation.batch_size):
-        batch_problems = remaining_problems[i:i + cfg.evaluation.batch_size]
+    for i in range(0, len(remaining_problems_idx), cfg.evaluation.batch_size):
+        batch_problems_idx = remaining_problems_idx[i:i + cfg.evaluation.batch_size]
+        batch_problems = [all_problems[idx] for idx in batch_problems_idx]
         
         while error_retry_count < max_error_retries:
             try:
@@ -449,12 +462,13 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
 
         
         # Save results
-        for problem_idx, (problem_file, result) in enumerate(zip(batch_problems, results)):
-            problem_id = problems.index(problem_file)  # Get the original index
-            checkpoint_manager.save_result(problem_id, result.__dict__)
+        for problem_idx, result in zip(batch_problems_idx, results):
+            checkpoint_manager.save_result(problem_idx, result.__dict__)
+            problem_name = all_problem_names[problem_idx]
+            problem_file = all_problems[problem_idx]
             
             status = 'Success' if result.success else 'Failed'
-            log_msg = f"\n{'='*50}\nTheorem: {problem_file.name}\nStatus: {status}"
+            log_msg = f"\n{'='*50}\nFilePath: {problem_file}\nTheorem: {problem_name}\nStatus: {status}"
             if result.success and result.proof:
                 log_msg += f"\nProof:\n{result.proof}"
             if not result.success and result.error_message:
@@ -490,4 +504,10 @@ def main(cfg: DictConfig) -> None:
     asyncio.run(evaluate_benchmark(cfg, logger, checkpoint_manager))
 
 if __name__ == "__main__":
+    # Add current directory to PYTHONPATH
+    # This is needed for running the script as background process in ray
+    import sys
+    file_path = os.path.abspath(__file__)
+    root_dir = os.path.dirname(file_path)
+    sys.path.append(root_dir)
     main() 
