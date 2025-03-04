@@ -7,17 +7,40 @@ Currently intended for only benchmark Lean 4; but the support technically extend
 
 1. Create and activate the conda environment:
 ```bash
-conda env create -f environment.yml
+conda create -n ftpevals python=3.11
 conda activate ftpevals
 ```
 
-Follow the setup instructions for the `itp-interface` package (see [here](https://github.com/trishullab/itp-interface)).
+2. Make sure that the `python` command points to the correct version:
+```bash
+which python
+```
+If it doesn't point to the correct version, you may need to update the `python` symlink:
+```bash
+sudo ln -sf <conda_path>/envs/ftpevals/bin/python /usr/bin/python
+```
 
-2. Set up API keys:
-Create a `.env` file or set environment variables for:
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GOOGLE_API_KEY`
-- `DEEPSEEK_API_KEY`
+3. Make sure to install pip:
+```bash
+python -m ensurepip
+```
 
+4. Ensure that the `pip` command points to the correct version:
+```bash
+which pip
+```
+If it doesn't point to the correct version, you may need to update the `pip` symlink:
+```bash
+sudo ln -sf <conda_path>/envs/ftpevals/bin/pip /usr/bin/pip
+```
+
+5. Run the setup script:
+```bash
+./setup.sh
+```
+
+
+6. Set up API keys:
+Create a file named `secrets/openai.key` in with the key for the OpenAI API.
+Similarly, for other APIs, create files named `secrets/<provider_name>.key` with the key for the respective API.
 

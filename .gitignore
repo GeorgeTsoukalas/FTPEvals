@@ -56,3 +56,6 @@ wandb/
 *.temp
 *.bak
 .DS_Store
+
+.conda/
+nohup.out

@@ -25,8 +25,8 @@ class Conversation:
         self.messages = []
 
 class LLMCaller:
-    def __init__(self, model_config: Optional[DictConfig] = None, secrets_dir: str = "secrets"):
-        self.logger = Logger("LLMCaller")
+    def __init__(self, model_config: Optional[DictConfig] = None, secrets_dir: str = "secrets",  logger: Optional[Logger] = None):
+        self.logger = logger.clone_with(name="LLMCaller", log_filename="low_level_prompts.log")
         # Get the directory containing this file
         current_file_dir = os.path.dirname(os.path.abspath(__file__))
         # Go up one level to project root

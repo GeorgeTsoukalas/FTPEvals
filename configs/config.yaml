@@ -1,8 +1,12 @@
+# @package _global_
 defaults:
   - _self_
   - model: gpt4o-mini
   - evaluation: putnambench
   - prompts: default
+  - override /hydra/hydra_logging@_group_: none
+  - override /hydra/job_logging@_group_: none
+  #^ We don't want excessive hydra logging in the output directory and stream
 
 # Global configurations
 project:
@@ -13,10 +17,14 @@ project:
 # General settings
 seed: 42
 debug: false
+# checkpoint_file: checkpoints/checkpoint_gpt-4o-mini_20250303_052714.json 
+#^ Change this to the path of the checkpoint file you want to use while resuming from previous runs
 
-# Hydra configurations
-hydra:
-  run:
-    dir: ${project.output_dir}
-  job:
-    chdir: true 
+# # Hydra configurations
+# hydra:
+#   run:
+#     dir: ${project.output_dir}
+#   job:
+#     chdir: true 
+#^ These hydra settings are needless and creates unnecessary directories in the output path
+# practically making the checkpoint_file setting useless because every run happens in a new directory

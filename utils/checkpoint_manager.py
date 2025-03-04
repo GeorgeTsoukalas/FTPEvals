@@ -6,16 +6,18 @@ import pandas as pd
 from utils.logging_utils import Logger
 
 class CheckpointManager:
-    def __init__(self, checkpoint_dir: str = "checkpoints"):
+    def __init__(self, checkpoint_dir: str = "checkpoints", max_attempts: int = 1):
         self.logger = Logger("CheckpointManager")
         self.checkpoint_dir = checkpoint_dir
+        self.max_attempts = max_attempts
         os.makedirs(checkpoint_dir, exist_ok=True)
         
         # Initialize checkpoint state
         self.current_checkpoint: Optional[str] = None
         self.state: Dict[str, Any] = {
-            "completed_problems": set(),
+            "completed_problems": {},
             "results": [],
+            "max_attempts": self.max_attempts,
             "metadata": {
                 "start_time": datetime.now().isoformat(),
                 "last_updated": None,
@@ -38,13 +40,15 @@ class CheckpointManager:
     
     def save_result(self, problem_id: str, result: Dict[str, Any]):
         """Save a single problem result"""
-        if problem_id in self.state["completed_problems"]:
+        problem_attempts = self.state["completed_problems"].get(problem_id, 0)
+        if problem_attempts >= self.max_attempts:
             self.logger.warning(f"Problem {problem_id} already completed, skipping")
             return
         
-        self.state["completed_problems"].add(problem_id)
+        self.state["completed_problems"][problem_id] = problem_attempts + 1
         self.state["results"].append({
             "problem_id": problem_id,
+            "attempts": problem_attempts + 1,
             "timestamp": datetime.now().isoformat(),
             **result
         })
@@ -54,6 +58,7 @@ class CheckpointManager:
         self._save_checkpoint()
     
     def load_latest_checkpoint(self, model_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    # ^ This is unused function
         """Load the latest checkpoint for a given model"""
         checkpoints = []
         for filename in os.listdir(self.checkpoint_dir):
@@ -74,7 +79,7 @@ class CheckpointManager:
         latest = max(checkpoints, key=lambda x: x[1]["metadata"]["last_updated"])
         self.current_checkpoint = latest[0]
         self.state = latest[1]
-        self.state["completed_problems"] = set(self.state["completed_problems"])
+        # self.state["completed_problems"] = set(self.state["completed_problems"])
         
         return self.state
     
@@ -99,7 +104,7 @@ class CheckpointManager:
         
         # Convert set to list for JSON serialization
         export_state = self.state.copy()
-        export_state["completed_problems"] = list(export_state["completed_problems"])
+        export_state["completed_problems"] = list(export_state["completed_problems"].keys())
         
         # Save full results as JSON
         results_file = os.path.join(output_dir, "results.json")
@@ -119,11 +124,11 @@ class CheckpointManager:
             
         # Convert set to list for JSON serialization
         checkpoint_state = self.state.copy()
-        checkpoint_state["completed_problems"] = list(checkpoint_state["completed_problems"])
+        # checkpoint_state["completed_problems"] = list(checkpoint_state["completed_problems"])
         
         self.state["metadata"]["last_updated"] = datetime.now().isoformat()
         self.state["metadata"]["completed_count"] = len(self.state["completed_problems"])
         
-        self.logger.debug(f"Saved checkpoint to {self.current_checkpoint}")
+        self.logger.info(f"Saved checkpoint to {self.current_checkpoint}")
         with open(self.current_checkpoint, "w") as f:
             json.dump(checkpoint_state, f, indent=2) 
