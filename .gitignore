@@ -59,3 +59,4 @@ wandb/
 
 .conda/
 nohup.out
+data/putnambench/lean4/temptodel*

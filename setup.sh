@@ -7,7 +7,7 @@ echo "===> Dependencies installed successfully <==="
 
 echo "===> Installing Lean <==="
 # Install Lean if not already installed
-export LEAN_VERSION="4.15.0"
+export LEAN_VERSION="4.17.0"
 install-lean-repl
 echo "===> Lean installed successfully <==="
 
