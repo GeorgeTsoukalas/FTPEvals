@@ -290,6 +290,7 @@ class BatchProofEvaluator:
                     # Handle the case where info might be None
                     extracted_env_id = extracted_env_ids[thm_idx]
                     theorem_details = theorem_details_list[extracted_env_id]
+                    theorem_name = theorem_details["name"]
                     success = done
                     error_message = None
                     info : ProofEnvInfo = info
@@ -302,7 +303,6 @@ class BatchProofEvaluator:
                         error_message = info.error_message
                         self.logger.error(f"Proof verification failed for {theorem_name}: {error_message}")
                     
-                    theorem_name = theorem_details["name"]
                     extracted_proof = extracted_proofs[thm_idx].kwargs["tactics"][0]
                     results.append(ProofResult(
                         theorem_name=theorem_name,
