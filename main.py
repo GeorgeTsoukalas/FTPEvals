@@ -508,7 +508,8 @@ def main(cfg: DictConfig) -> None:
             checkpoint = json.load(f)
             checkpoint_manager.current_checkpoint = cfg.checkpoint_file
             checkpoint_manager.state = checkpoint
-            checkpoint_manager.state["completed_problems"] = set(checkpoint_manager.state["completed_problems"])
+            dict_str_key = checkpoint_manager.state["completed_problems"]
+            checkpoint_manager.state["completed_problems"] = {int(k): v for k, v in dict_str_key.items()}
         logger.info(f"Loaded checkpoint with {len(checkpoint_manager.state['completed_problems'])} completed problems")
     
 
