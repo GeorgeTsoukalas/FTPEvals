@@ -1,7 +1,7 @@
 import os
 from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 import google.generativeai as genai
 from utils.logging_utils import Logger
 from omegaconf import DictConfig
@@ -50,7 +50,8 @@ class LLMCaller:
         key_files = {
             "openai": "openai.key",
             "anthropic": "anthropic.key",
-            "gemini": "gemini.key"
+            "gemini": "gemini.key",
+            "deepseek": "deepseek.key"
         }
         
         # If no model config is provided, we need all keys
@@ -74,7 +75,7 @@ class LLMCaller:
             
         # We don't need to initialize OpenAI client here as we create it in the call_openai method
         if hasattr(self, "anthropic_key"):
-            self.anthropic_client = Anthropic(api_key=self.anthropic_key)
+            self.anthropic_client = AsyncAnthropic(api_key=self.anthropic_key)
         if hasattr(self, "gemini_key"):
             genai.configure(api_key=self.gemini_key)
     
@@ -167,7 +168,13 @@ class LLMCaller:
             conv = self.get_or_create_conversation(conversation_id)
             conv.add_message("user", prompt)
             
-            messages = [{"role": msg.role, "content": msg.content} for msg in conv.get_messages()]
+            # Convert conversation history to Anthropic's message format
+            messages = []
+            for msg in conv.get_messages():
+                if msg.role == "user":
+                    messages.append({"role": "user", "content": msg.content})
+                elif msg.role == "assistant":
+                    messages.append({"role": "assistant", "content": msg.content})
             
             # Add system parameter if provided
             if system_prompt is not None:
@@ -175,19 +182,24 @@ class LLMCaller:
                 # Anthropic uses a separate system parameter
                 kwargs["system"] = system_prompt
             
+            # Create message with the required parameters - use non-async version
             response = await self.anthropic_client.messages.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=max_tokens if max_tokens is not None else 4096,
                 **kwargs
             )
             
-            conv.add_message("assistant", response.content[0].text)
+            # Get the response content
+            response_content = response.content[0].text
+            conv.add_message("assistant", response_content)
             self.logger.info(f"Successfully called Anthropic API with model {model}")
             return response
         except Exception as e:
             self.logger.error(f"Error calling Anthropic API: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
     async def call_gemini(
@@ -281,6 +293,51 @@ class LLMCaller:
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
+    async def call_deepseek(
+        self,
+        conversation_id: str,
+        prompt: str,
+        model: str = "deepseek-reasoner",
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Call DeepSeek API with conversation history"""
+        try:
+            from openai import AsyncOpenAI
+            
+            # Create client instance with DeepSeek base URL
+            client = AsyncOpenAI(
+                api_key=self.deepseek_key,
+                base_url="https://api.deepseek.com"
+            )
+            
+            conv = self.get_or_create_conversation(conversation_id)
+            conv.add_message("user", prompt)
+            
+            messages = [{"role": msg.role, "content": msg.content} for msg in conv.get_messages()]
+            
+            # Add system message if provided
+            if system_prompt is not None:
+                self.logger.info(f"\n{'='*50}\nUsing SYSTEM PROMPT for {conversation_id} with DeepSeek:\n{system_prompt}\n{'='*50}")
+                messages.insert(0, {"role": "system", "content": system_prompt})
+            
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            
+            conv.add_message("assistant", response.choices[0].message.content)
+            self.logger.info(f"Successfully called DeepSeek API with model {model}")
+            return response
+        except Exception as e:
+            self.logger.error(f"Error calling DeepSeek API: {e}")
+            raise
+
     async def call_model(
         self,
         conversation_id: str,
@@ -292,7 +349,8 @@ class LLMCaller:
         provider_map = {
             "openai": self.call_openai,
             "anthropic": self.call_anthropic,
-            "gemini": self.call_gemini
+            "gemini": self.call_gemini,
+            "deepseek": self.call_deepseek
         }
         
         if provider not in provider_map:
@@ -357,7 +415,7 @@ class LLMCaller:
         response = await provider_map[provider](conversation_id, prompt, **kwargs)
         
         # Log the response
-        if provider == "openai":
+        if provider in ["openai", "deepseek"]:
             response_text = response.choices[0].message.content
         elif provider == "anthropic":
             response_text = response.content[0].text

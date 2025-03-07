@@ -17,7 +17,7 @@ project:
 # General settings
 seed: 42
 debug: false
-# checkpoint_file: checkpoints/checkpoint_gpt-4o-mini_20250303_052714.json 
+# checkpoint_file: checkpoints/checkpoint_gpt-4o-mini_20250307_193136.json
 #^ Change this to the path of the checkpoint file you want to use while resuming from previous runs
 
 # # Hydra configurations

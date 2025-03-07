@@ -115,7 +115,7 @@ class BatchProofEvaluator:
             )
             
             # Extract proof text based on provider
-            if model_config.provider == "openai":
+            if model_config.provider == "openai" or model_config.provider == "deepseek":
                 proof = response.choices[0].message.content
             elif model_config.provider == "anthropic":
                 proof = response.content[0].text
