@@ -80,7 +80,8 @@ class BatchProofEvaluator:
             file_path=abs_file_path,
             language=ProofAction.Language.LEAN4,
             always_use_retrieval=False,
-            keep_local_context=True
+            keep_local_context=True,
+            enforce_qed=True
         )
     
     def _get_theorem_name(self, file_path: str) -> str:
@@ -131,7 +132,7 @@ class BatchProofEvaluator:
             self.logger.exception(f"Error generating proof for {theorem_name}: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-            return "", False
+            raise
     
     async def evaluate_batch(
         self,
@@ -225,37 +226,33 @@ class BatchProofEvaluator:
         try:
             proofs = await asyncio.gather(*proof_tasks)
         except Exception as e:
+            if isinstance(e, ValueError):
+                raise
             # Catch any unexpected errors during the batch evaluation
             self.logger.exception(f"Unexpected error during proof generation: {str(e)}")
             # For any problems that haven't been processed yet, add failed results
-            processed_theorems = [result.theorem_name for result in results]
-            for file_path in problem_files:
-                theorem_name = self._get_theorem_name(str(file_path))
-                if theorem_name not in processed_theorems:
-                    results.append(ProofResult(
-                        theorem_name=theorem_name,
-                        success=False,
-                        time_taken=0.0,
-                        error_message=f"Evaluation skipped due to batch error: {str(e)}"
-                    ))
+            # processed_theorems = [result.theorem_name for result in results]
+            # for file_path in problem_files:
+            #     theorem_name = self._get_theorem_name(str(file_path))
+            #     if theorem_name not in processed_theorems:
+            #         results.append(ProofResult(
+            #             theorem_name=theorem_name,
+            #             success=False,
+            #             time_taken=0.0,
+            #             error_message=f"Evaluation skipped due to batch error: {str(e)}"
+            #         ))
             # Retriable because the failure here will happen due to API failure or throttling
             # And we can retry proof generation for such failures
             raise RetriableError(e)
 
         extracted_proofs = []
         extracted_env_ids = []
-        extracted_theorem_names = []
         for i, (proof, generation_success) in enumerate(proofs):
             start_time = time.time()
             theorem_name = theorem_details_list[i]["name"]
-            if not generation_success:
-                results.append(ProofResult(
-                    theorem_name=theorem_name,
-                    success=False,
-                    time_taken=time.time() - start_time,
-                    error_message="Failed to generate proof"
-                ))
-                continue
+            theorem_content = theorem_details_list[i]["content"]
+            
+            assert generation_success, f"Proof generation failed for {theorem_name}"
                 
             # Extract proof from between [PROOF] and [END PROOF] delimiters if present
             extracted_proof = BatchProofEvaluator.proof_extraction_pattern.findall(proof)
@@ -270,9 +267,10 @@ class BatchProofEvaluator:
                 extracted_proofs.append(ProofAction(
                     ProofAction.ActionType.RUN_TACTIC, 
                     ProofAction.Language.LEAN4, 
-                    tactics=[extracted_proof])) # TODO fix to execute not beyond the proof completion or first failure
+                    tactics=[extracted_proof, "done"]))             
                 extracted_env_ids.append(i)
-                extracted_theorem_names.append(theorem_name)
+                self.logger.info(f"Generated proof for\n {theorem_name}\n{theorem_content}")
+                self.logger.info(f"Proof:\n{proof}")
             else:
                 # Log an error if the model doesn't use the required delimiters
                 error_msg = f"Model response for {theorem_name} does not contain the required [PROOF] and [END PROOF] delimiters"
@@ -290,6 +288,9 @@ class BatchProofEvaluator:
                 step_results = pool.step(extracted_proofs, extracted_env_ids)
                 for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
                     # Handle the case where info might be None
+                    extracted_env_id = extracted_env_ids[thm_idx]
+                    theorem_details = theorem_details_list[extracted_env_id]
+                    theorem_name = theorem_details["name"]
                     success = done
                     error_message = None
                     info : ProofEnvInfo = info
@@ -297,20 +298,17 @@ class BatchProofEvaluator:
                         success = False
                         error_message = "Proof verification failed: Lean server error or timeout"
                         self.logger.error(f"Received None info object during proof verification for {theorem_name}")                            
-                    if info.error_message and info.error_message != BatchProofEvaluator.proof_already_complete_error_message:
+                    if info.error_message is not None:
                         success = False
                         error_message = info.error_message
-                    else:
-                        success = True
-                        info.progress = ProgressState.DONE
-                        info.info_messages.append(BatchProofEvaluator.proof_already_complete_error_message)
+                        self.logger.error(f"Proof verification failed for {theorem_name}: {error_message}")
                     
-                    theorem_name = extracted_theorem_names[thm_idx]
+                    extracted_proof = extracted_proofs[thm_idx].kwargs["tactics"][0]
                     results.append(ProofResult(
                         theorem_name=theorem_name,
                         success=success,
                         time_taken=time.time() - start_time,
-                        proof=extracted_proof if success else None,
+                        proof=extracted_proof,
                         error_message=error_message))
             except Exception as e:
                 # Catch any unexpected errors during the evaluation of this problem
@@ -435,8 +433,8 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     
     # Filter out the problems that have already been completed
     # This ensures we maintain the priority order
-    remaining_problems_idx = [problems_idxs[i] for i in range(len(problems_idxs)) 
-    if problems_idxs[i] not in completed_problem_ids or completed_problem_ids[problems_idxs[i]] < checkpoint_manager.max_attempts]
+    remaining_problems_idx = [problems_idx for problems_idx in problems_idxs 
+    if completed_problem_ids.get(problems_idx, 0) < checkpoint_manager.max_attempts]
     
     logger.info(f"Remaining problems to evaluate: {len(remaining_problems_idx)}")
     logger.info(f"First few problems to evaluate: {[all_problem_names[idx] for idx in remaining_problems_idx[:5]]}")
