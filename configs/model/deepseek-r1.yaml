@@ -1,8 +1,8 @@
 name: deepseek-reasoner
 provider: deepseek # hacky fix to support existing code although actually relies on openai
 temperature: 0.7
-max_tokens: 8192
-max_completion_tokens: 8192
+max_tokens: 2048
+max_completion_tokens: 2048
 top_p: 1.0
 frequency_penalty: 0.0
 presence_penalty: 0.0

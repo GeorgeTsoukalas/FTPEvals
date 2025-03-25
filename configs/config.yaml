@@ -17,8 +17,8 @@ project:
 # General settings
 seed: 42
 debug: false
-# checkpoint_file: checkpoints/checkpoint_gpt-4o-mini_20250307_193136.json
-#^ Change this to the path of the checkpoint file you want to use while resuming from previous runs
+# checkpoint_file: checkpoints/checkpoint_deepseek-reasoner_20250311_161403.json
+# ^ Change this to the path of the checkpoint file you want to use while resuming from previous runs
 
 # # Hydra configurations
 # hydra:

@@ -132,7 +132,7 @@ class BatchProofEvaluator:
             self.logger.exception(f"Error generating proof for {theorem_name}: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+            # raise
     
     async def evaluate_batch(
         self,
