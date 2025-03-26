@@ -7,7 +7,7 @@ metrics:
   - completion_rate
   - time_to_solve
 max_attempts: 1
-timeout: 300  # seconds
-batch_size: 16
-max_parallel_envs: 16
+timeout: 60  # seconds
+batch_size: 2
+max_parallel_envs: 2
 max_proof_depth: 100
