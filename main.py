@@ -36,6 +36,7 @@ class ProofResult:
     time_taken: float
     error_message: Optional[str] = None
     proof: Optional[str] = None
+    problem_idx: Optional[int] = None
 
 class BatchProofEvaluator:
     theorem_match_pattern = re.compile(r"^\s*(theorem\s+[\s|\S]+?:=\s*sorry)", re.MULTILINE)
@@ -132,18 +133,19 @@ class BatchProofEvaluator:
             self.logger.exception(f"Error generating proof for {theorem_name}: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-            # raise
+            raise # We should raise the exception so that we can retry those problem for which the API call failed
     
     async def evaluate_batch(
         self,
-        problem_files: List[str],
+        problem_files_with_idxs: List[Tuple[int, str]],
         prompt_template: str,
         model_config: DictConfig,
         system_prompt: Optional[str] = None
     ) -> List[ProofResult]:
         """Evaluate a batch of problems."""
         results = []
-        
+        problem_idx = [idx for idx, _ in problem_files_with_idxs]
+        problem_files = [file_path for _, file_path in problem_files_with_idxs]
         # Create proof executors for each problem
         env_actors = []
         # Read theorems from files
@@ -211,6 +213,8 @@ class BatchProofEvaluator:
         theorem_details_list = []
         # Generate proofs for all problems in parallel
         proof_tasks = []
+        theorem_map_to_idx = {}
+        running_idx = 0
         for file_path in problem_files:
             # Pass the theorem content and system prompt
             all_theorem_details = theorem_contents_per_file[file_path]
@@ -222,6 +226,10 @@ class BatchProofEvaluator:
                 assert theorem_name not in theorem_content, f"Theorem name {theorem_name} should not be present in theorem content"
                 task = self.generate_proof(theorem_name, prompt_template, model_config, theorem_content, system_prompt)
                 proof_tasks.append(task)
+                theorem_map_to_idx[theorem_name] = problem_idx[running_idx]
+                running_idx += 1
+        assert len(theorem_map_to_idx) == len(problem_idx), "Theorem map to idx should have same number of elements as problem idx"
+        assert len(proof_tasks) == len(problem_idx), "Proof tasks should have same number of elements as problem idx"
             
         try:
             proofs = await asyncio.gather(*proof_tasks)
@@ -230,17 +238,6 @@ class BatchProofEvaluator:
                 raise
             # Catch any unexpected errors during the batch evaluation
             self.logger.exception(f"Unexpected error during proof generation: {str(e)}")
-            # For any problems that haven't been processed yet, add failed results
-            # processed_theorems = [result.theorem_name for result in results]
-            # for file_path in problem_files:
-            #     theorem_name = self._get_theorem_name(str(file_path))
-            #     if theorem_name not in processed_theorems:
-            #         results.append(ProofResult(
-            #             theorem_name=theorem_name,
-            #             success=False,
-            #             time_taken=0.0,
-            #             error_message=f"Evaluation skipped due to batch error: {str(e)}"
-            #         ))
             # Retriable because the failure here will happen due to API failure or throttling
             # And we can retry proof generation for such failures
             raise RetriableError(e)
@@ -267,7 +264,7 @@ class BatchProofEvaluator:
                 extracted_proofs.append(ProofAction(
                     ProofAction.ActionType.RUN_TACTIC, 
                     ProofAction.Language.LEAN4, 
-                    tactics=[extracted_proof, "done"]))             
+                    tactics=[extracted_proof]))             
                 extracted_env_ids.append(i)
                 self.logger.info(f"Generated proof for\n {theorem_name}\n{theorem_content}")
                 self.logger.info(f"Proof:\n{proof}")
@@ -279,13 +276,16 @@ class BatchProofEvaluator:
                     theorem_name=theorem_name,
                     success=False,
                     time_taken=time.time() - start_time,
-                    error_message=error_msg
+                    error_message=error_msg,
+                    problem_idx=theorem_map_to_idx[theorem_name]
                 ))
 
         with pool:
             # Parallely verify proofs using the pool
-            try:                   
+            try:
                 step_results = pool.step(extracted_proofs, extracted_env_ids)
+                env_ids_with_empty_states = []
+                details_with_empty_states = []
                 for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
                     # Handle the case where info might be None
                     extracted_env_id = extracted_env_ids[thm_idx]
@@ -304,12 +304,42 @@ class BatchProofEvaluator:
                         self.logger.error(f"Proof verification failed for {theorem_name}: {error_message}")
                     
                     extracted_proof = extracted_proofs[thm_idx].kwargs["tactics"][0]
+                    if error_message is None:
+                        env_ids_with_empty_states.append(extracted_env_id)
+                        details_with_empty_states.append((
+                            theorem_name,
+                            time.time() - start_time,
+                            extracted_proof,
+                            error_message
+                        ))
+                    else:
+                        results.append(ProofResult(
+                            theorem_name=theorem_name,
+                            success=success,
+                            time_taken=time.time() - start_time,
+                            proof=extracted_proof,
+                            error_message=error_message,
+                            problem_idx=theorem_map_to_idx[theorem_name]))
+                qed_proof_step = [ProofAction(ProofAction.ActionType.RUN_TACTIC, ProofAction.Language.LEAN4, tactics=["done"])] * len(env_ids_with_empty_states)
+                step_results = pool.step(qed_proof_step, env_ids_with_empty_states)
+                for thm_idx, (_, _, _, _, done, info) in enumerate(step_results):
+                    theorem_name, time_taken, extracted_proof, error_message = details_with_empty_states[thm_idx]
+                    success = done
+                    if info is None:
+                        success = False
+                        error_message = "Proof verification failed: Lean server error or timeout"
+                        self.logger.error(f"Received None info object during proof verification for {theorem_name}")
+                    if info.error_message is not None:
+                        success = False
+                        error_message = info.error_message
+                        self.logger.error(f"Proof verification failed for {theorem_name}: {error_message}")
                     results.append(ProofResult(
                         theorem_name=theorem_name,
                         success=success,
-                        time_taken=time.time() - start_time,
+                        time_taken=time_taken,
                         proof=extracted_proof,
-                        error_message=error_message))
+                        error_message=error_message,
+                        problem_idx=theorem_map_to_idx[theorem_name]))
             except Exception as e:
                 # Catch any unexpected errors during the evaluation of this problem
                 error_message = f"Unexpected error during evaluation: {str(e)}"
@@ -320,7 +350,8 @@ class BatchProofEvaluator:
                     theorem_name=theorem_name,
                     success=False,
                     time_taken=time.time() - start_time,
-                    error_message=error_message))
+                    error_message=error_message,
+                    problem_idx=theorem_map_to_idx[theorem_name]))
         
         return results
 
@@ -447,13 +478,12 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
     # Process problems in batches
     for i in range(0, len(remaining_problems_idx), cfg.evaluation.batch_size):
         batch_problems_idx = remaining_problems_idx[i:i + cfg.evaluation.batch_size]
-        batch_problems = [all_problems[idx] for idx in batch_problems_idx]
         
         while error_retry_count < max_error_retries:
             try:
                 # Evaluate batch
                 results = await evaluator.evaluate_batch(
-                    problem_files=batch_problems,
+                    problem_files_with_idxs=[(idx, all_problems[idx]) for idx in batch_problems_idx],
                     prompt_template=cfg.prompts.template,
                     model_config=cfg.model,
                     system_prompt=cfg.prompts.system_prompt if hasattr(cfg.prompts, "system_prompt") else None
@@ -470,7 +500,9 @@ async def evaluate_benchmark(cfg: DictConfig, logger: Logger, checkpoint_manager
 
         
         # Save results
-        for problem_idx, result in zip(batch_problems_idx, results):
+        for result in results:
+            assert result.problem_idx is not None, "Proof idx should not be None"
+            problem_idx = result.problem_idx
             checkpoint_manager.save_result(problem_idx, result.__dict__)
             problem_name = all_problem_names[problem_idx]
             problem_file = all_problems[problem_idx]
