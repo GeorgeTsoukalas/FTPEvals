@@ -1,0 +1,7 @@
+name: grok-3-mini-beta
+provider: x
+temperature: 0.5
+max_tokens: 65536
+top_p: 0.95
+top_k: 64
+response_mime_type: text/plain
