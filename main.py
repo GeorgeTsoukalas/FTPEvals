@@ -116,7 +116,7 @@ class BatchProofEvaluator:
             )
             
             # Extract proof text based on provider
-            if model_config.provider == "openai" or model_config.provider == "deepseek":
+            if model_config.provider == "openai" or model_config.provider == "deepseek" or model_config.provider == "x":
                 proof = response.choices[0].message.content
             elif model_config.provider == "anthropic":
                 proof = response.content[0].text
@@ -558,3 +558,5 @@ if __name__ == "__main__":
     root_dir = os.path.dirname(file_path)
     sys.path.append(root_dir)
     main() 
+
+# run with  nohup python main.py model=grok3-mini evaluation=putnambench
