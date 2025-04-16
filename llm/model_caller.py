@@ -51,7 +51,8 @@ class LLMCaller:
             "openai": "openai.key",
             "anthropic": "anthropic.key",
             "gemini": "gemini.key",
-            "deepseek": "deepseek.key"
+            "deepseek": "deepseek.key",
+            "x": "x.key",
         }
         
         # If no model config is provided, we need all keys
@@ -121,17 +122,17 @@ class LLMCaller:
             }
             
             # Handle o3 models specially
-            is_o3_model = "o3" in model.lower()
+            is_o_model = "o3" in model.lower() or "o4" in model.lower()
             
-            # Add temperature only for non-o3 models and if it's not None
-            if not is_o3_model and temperature is not None:
+            # Add temperature only for non-o3/o4 models and if it's not None
+            if not is_o_model and temperature is not None:
                 api_params["temperature"] = temperature
                 self.logger.info(f"Using temperature: {temperature} for model {model}")
             else:
                 self.logger.info(f"Skipping temperature parameter for model {model}")
             
             # Handle token limits based on model type
-            if is_o3_model:
+            if is_o_model:
                 if max_completion_tokens is not None:
                     self.logger.info(f"Using max_completion_tokens: {max_completion_tokens} for model {model}")
                     api_params["max_completion_tokens"] = max_completion_tokens
@@ -338,6 +339,51 @@ class LLMCaller:
             self.logger.error(f"Error calling DeepSeek API: {e}")
             raise
 
+    async def call_grok(
+        self,
+        conversation_id: str,
+        prompt: str,
+        model: str = "grok-3-mini-beta",
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Call X API with conversation history"""
+        try:
+            from openai import AsyncOpenAI
+            
+            # Create client instance with DeepSeek base URL
+            client = AsyncOpenAI(
+                api_key=self.x_key,
+                base_url="https://api.x.ai/v1"
+            )
+            
+            conv = self.get_or_create_conversation(conversation_id)
+            conv.add_message("user", prompt)
+            
+            messages = [{"role": msg.role, "content": msg.content} for msg in conv.get_messages()]
+            
+            # Add system message if provided
+            if system_prompt is not None:
+                self.logger.info(f"\n{'='*50}\nUsing SYSTEM PROMPT for {conversation_id} with DeepSeek:\n{system_prompt}\n{'='*50}")
+                messages.insert(0, {"role": "system", "content": system_prompt})
+            
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            
+            conv.add_message("assistant", response.choices[0].message.content)
+            self.logger.info(f"Successfully called X API with model {model}")
+            return response
+        except Exception as e:
+            self.logger.error(f"Error calling X API: {e}")
+            raise
+
     async def call_model(
         self,
         conversation_id: str,
@@ -350,7 +396,8 @@ class LLMCaller:
             "openai": self.call_openai,
             "anthropic": self.call_anthropic,
             "gemini": self.call_gemini,
-            "deepseek": self.call_deepseek
+            "deepseek": self.call_deepseek,
+            "x": self.call_grok
         }
         
         if provider not in provider_map:
@@ -369,10 +416,10 @@ class LLMCaller:
                 model_name = self.model_config.name
                 
             # For o3 models, use max_completion_tokens and remove temperature
-            if "o3" in model_name.lower() and hasattr(self, "model_config"):
+            if ("o3" in model_name.lower() or "o4" in model_name.lower()) and hasattr(self, "model_config"):
                 # Remove temperature for o3 models
                 if "temperature" in kwargs:
-                    self.logger.info(f"Removing temperature parameter for o3 model: {model_name}")
+                    self.logger.info(f"Removing temperature parameter for o3/o4 model: {model_name}")
                     kwargs.pop("temperature")
                 
                 # Handle token limits
@@ -415,7 +462,7 @@ class LLMCaller:
         response = await provider_map[provider](conversation_id, prompt, **kwargs)
         
         # Log the response
-        if provider in ["openai", "deepseek"]:
+        if provider in ["openai", "deepseek", "x"]:
             response_text = response.choices[0].message.content
         elif provider == "anthropic":
             response_text = response.content[0].text
